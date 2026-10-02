@@ -5,6 +5,10 @@ using Features.Application.Products;
 using Features.Domain.Products;
 using Features.Infrastructure.Products;
 using Features.Infrastructure.Notifications;
+using Features.OData;
+using Features.Infrastructure.DataAccess;
+using Features.Infrastructure.DataAccess.Sample;
+using Microsoft.AspNetCore.OData;
 using Microsoft.AspNetCore.OutputCaching;
 using Scalar.AspNetCore;
 
@@ -13,9 +17,19 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services
+    .AddControllers()
+    .AddOData(options => options
+        .Select()
+        .Filter()
+        .OrderBy()
+        .Count()
+        .SetMaxTop(100)
+        .AddRouteComponents("odata", ProductEdmModel.GetEdmModel()));
 builder.Services.AddEventInfrastructure(builder.Configuration);
 builder.Services.AddNotificationServices(builder.Configuration);
 builder.Services.AddRedisOutputCaching(builder.Configuration);
+builder.Services.AddSqlServerMetadataDataAccess<MetadataDataContext>(builder.Configuration);
 builder.Services.AddSingleton<IProductCatalog, JsonProductCatalog>();
 builder.Services.AddAuthorization(options =>
 {
@@ -26,6 +40,33 @@ builder.Services.AddAuthorization(options =>
 });
 
 var app = builder.Build();
+_ = app.Services.GetRequiredService<IEntityMetadataResolver>();
+
+if (app.Environment.IsDevelopment())
+{
+    await using var sampleScope = app.Services.CreateAsyncScope();
+    var dataContext = sampleScope.ServiceProvider.GetRequiredService<MetadataDataContext>();
+    if (await dataContext.Database.EnsureCreatedAsync())
+    {
+        var customer = new Customer
+        {
+            Name = "Ada Customer",
+            Country = "IN",
+            Email = "ada@domain.com"
+        };
+        var order = new Order
+        {
+            OrderDate = new DateOnly(2026, 10, 2),
+            Status = "Open",
+            Total = 1500,
+            Customer = customer,
+            Lines = [new OrderLine { ProductId = 101, Qty = 2 }]
+        };
+        dataContext.Add(order);
+        await dataContext.SaveChangesAsync();
+    }
+}
+
 var productCatalog = app.Services.GetRequiredService<IProductCatalog>();
 await productCatalog.SeedAsync();
 
@@ -41,6 +82,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.UseOutputCache();
+app.MapControllers();
 
 var summaries = new[]
 {
